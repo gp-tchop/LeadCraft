@@ -37,7 +37,7 @@ const upload = multer({
 
 /**
  * POST /api/upload
- * Upload a CSV file and start enrichment job.
+ * Upload a CSV file, parse it, and return preview. Does NOT start enrichment.
  */
 router.post('/', upload.single('file'), async (req, res) => {
   try {
@@ -61,16 +61,15 @@ router.post('/', upload.single('file'), async (req, res) => {
     const totalRows = rows.length;
     const missingEmails = rows.filter((r) => !(r[emailColumn] || '').trim()).length;
 
-    // Create in-memory job and start processing in background
+    // Create job but do NOT start processing yet
     createJob(jobId, { inputFile: filePath, jobId });
-    processJob(jobId); // fire-and-forget
-
-    logger.info(`Job ${jobId} started: ${totalRows} rows, ${missingEmails} missing emails`);
 
     // Build preview: all rows with missing emails
     const missingEmailRows = rows
       .map((row, index) => ({ ...row, __rowIndex: index }))
       .filter((r) => !(r[emailColumn] || '').trim());
+
+    logger.info(`Job ${jobId} uploaded: ${totalRows} rows, ${missingEmails} missing emails`);
 
     res.json({
       jobId,
@@ -79,7 +78,7 @@ router.post('/', upload.single('file'), async (req, res) => {
       emailColumn,
       headers,
       preview: missingEmailRows,
-      message: 'File uploaded and enrichment job started.',
+      message: 'File uploaded. Choose how many rows to enrich.',
     });
   } catch (err) {
     logger.error(`Upload error: ${err.message}`);
@@ -87,6 +86,39 @@ router.post('/', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: 'Upload failed. Please try again.' });
+  }
+});
+
+/**
+ * POST /api/upload/:jobId/start
+ * Start enrichment for an uploaded job with a batch limit.
+ */
+router.post('/:jobId/start', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const { batchSize } = req.body; // 10, 25, 50, 100, or 'all'
+
+    const job = require('../utils/jobStore').getJob(jobId);
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    if (job.state === 'active' || job.state === 'completed') {
+      return res.status(400).json({ error: 'Job already started' });
+    }
+
+    // Store batch size in job data
+    job.data.batchSize = batchSize || 'all';
+
+    logger.info(`Job ${jobId} starting enrichment with batch size: ${batchSize || 'all'}`);
+
+    // Fire-and-forget
+    processJob(jobId);
+
+    res.json({ jobId, message: 'Enrichment started', batchSize: batchSize || 'all' });
+  } catch (err) {
+    logger.error(`Start enrichment error: ${err.message}`);
+    res.status(500).json({ error: 'Failed to start enrichment' });
   }
 });
 

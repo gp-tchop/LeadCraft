@@ -1,6 +1,7 @@
 import Head from 'next/head';
 import FileUpload from '../components/FileUpload';
 import UploadInfo from '../components/UploadInfo';
+import BatchSelector from '../components/BatchSelector';
 import ProgressBar from '../components/ProgressBar';
 import ResultsPanel from '../components/ResultsPanel';
 import useEnrichment from '../hooks/useEnrichment';
@@ -15,6 +16,7 @@ export default function Home() {
     liveResults,
     error,
     uploadFile,
+    startEnrichment,
     downloadFile,
     reset,
   } = useEnrichment();
@@ -76,9 +78,17 @@ export default function Home() {
               </div>
             )}
 
-            {/* Upload Info with live results */}
-            {(state === 'processing' || state === 'complete') && (
+            {/* Upload Info — shown in ready, processing, and complete states */}
+            {(state === 'ready' || state === 'processing' || state === 'complete') && (
               <UploadInfo info={uploadInfo} liveResults={liveResults} />
+            )}
+
+            {/* Batch Size Selector — shown after upload, before enrichment starts */}
+            {state === 'ready' && uploadInfo && (
+              <BatchSelector
+                missingEmails={uploadInfo.missingEmails}
+                onSelect={startEnrichment}
+              />
             )}
 
             {/* Progress */}

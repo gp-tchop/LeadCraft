@@ -7,7 +7,7 @@ const pLimit = require('p-limit');
 
 /**
  * Process an enrichment job in-memory (no Redis required).
- * Runs asynchronously — called fire-and-forget from the upload route.
+ * Runs asynchronously — called fire-and-forget from the start endpoint.
  */
 async function processJob(jobId) {
   const job = getJob(jobId);
@@ -16,8 +16,8 @@ async function processJob(jobId) {
   try {
     updateJob(jobId, { state: 'active' });
 
-    const { inputFile } = job.data;
-    logger.info(`Starting enrichment job ${jobId}`);
+    const { inputFile, batchSize } = job.data;
+    logger.info(`Starting enrichment job ${jobId}, batchSize: ${batchSize || 'all'}`);
 
     const { headers, rows } = await parseCSV(inputFile);
     const emailColumn = detectEmailColumn(headers);
@@ -27,15 +27,27 @@ async function processJob(jobId) {
     }
 
     const totalRows = rows.length;
-    const rowsNeedingEnrichment = rows.filter((row) => !(row[emailColumn] || '').trim());
+    const allRowsNeedingEnrichment = [];
+    rows.forEach((row, index) => {
+      if (!(row[emailColumn] || '').trim()) {
+        allRowsNeedingEnrichment.push({ row, index });
+      }
+    });
 
-    logger.info(`Job ${jobId}: ${totalRows} total rows, ${rowsNeedingEnrichment.length} need enrichment`);
+    // Apply batch size limit
+    const limit_count = batchSize === 'all' || !batchSize
+      ? allRowsNeedingEnrichment.length
+      : Math.min(parseInt(batchSize), allRowsNeedingEnrichment.length);
+
+    const rowsToProcess = allRowsNeedingEnrichment.slice(0, limit_count);
+
+    logger.info(`Job ${jobId}: ${totalRows} total rows, ${allRowsNeedingEnrichment.length} need enrichment, processing ${rowsToProcess.length}`);
 
     updateJob(jobId, {
       progress: {
         phase: 'processing',
         total: totalRows,
-        needEnrichment: rowsNeedingEnrichment.length,
+        needEnrichment: rowsToProcess.length,
         processed: 0,
         enriched: 0,
         failed: 0,
@@ -43,18 +55,15 @@ async function processJob(jobId) {
     });
 
     const maxConcurrent = parseInt(process.env.MAX_CONCURRENT_ROWS) || 10;
-    const limit = pLimit(maxConcurrent);
+    const concurrencyLimit = pLimit(maxConcurrent);
 
     let processed = 0;
     let enriched = 0;
     let failed = 0;
     const enrichmentLog = [];
 
-    const tasks = rows.map((row, index) => {
-      const emailVal = (row[emailColumn] || '').trim();
-      if (emailVal) return Promise.resolve(); // Already has email
-
-      return limit(async () => {
+    const tasks = rowsToProcess.map(({ row, index }) => {
+      return concurrencyLimit(async () => {
         try {
           const result = await enrichContact(row, emailColumn);
 
@@ -94,7 +103,7 @@ async function processJob(jobId) {
           progress: {
             phase: 'processing',
             total: totalRows,
-            needEnrichment: rowsNeedingEnrichment.length,
+            needEnrichment: rowsToProcess.length,
             processed,
             enriched,
             failed,
@@ -111,12 +120,15 @@ async function processJob(jobId) {
     const outputPath = path.join(__dirname, '..', '..', 'output', outputFile);
     await writeCSV(outputPath, headers, rows);
 
+    const skipped = allRowsNeedingEnrichment.length - rowsToProcess.length;
+
     const summary = {
       totalRows,
-      needEnrichment: rowsNeedingEnrichment.length,
+      needEnrichment: rowsToProcess.length,
       enriched,
       failed,
-      unchanged: totalRows - rowsNeedingEnrichment.length,
+      unchanged: totalRows - allRowsNeedingEnrichment.length,
+      skipped,
       outputFile,
       enrichmentLog,
     };
@@ -127,7 +139,7 @@ async function processJob(jobId) {
       progress: { phase: 'complete', ...summary },
     });
 
-    logger.info(`Job ${jobId} complete: ${enriched} enriched, ${failed} not found`);
+    logger.info(`Job ${jobId} complete: ${enriched} enriched, ${failed} not found, ${skipped} skipped`);
   } catch (err) {
     logger.error(`Job ${jobId} failed: ${err.message}`);
     updateJob(jobId, {

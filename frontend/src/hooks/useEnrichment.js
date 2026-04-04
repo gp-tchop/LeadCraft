@@ -4,7 +4,7 @@ import axios from 'axios';
 const POLL_INTERVAL = 2000;
 
 export default function useEnrichment() {
-  const [state, setState] = useState('idle'); // idle | uploading | processing | complete | error
+  const [state, setState] = useState('idle'); // idle | uploading | ready | processing | complete | error
   const [jobId, setJobId] = useState(null);
   const [uploadInfo, setUploadInfo] = useState(null);
   const [progress, setProgress] = useState(null);
@@ -57,7 +57,6 @@ export default function useEnrichment() {
           setState('error');
         }
       } catch (err) {
-        // Don't stop polling on transient network errors
         console.error('Poll error:', err.message);
       }
     }, POLL_INTERVAL);
@@ -82,16 +81,27 @@ export default function useEnrichment() {
       const data = resp.data;
       setJobId(data.jobId);
       setUploadInfo(data);
-      setState('processing');
-
-      // Start polling for progress
-      pollJobStatus(data.jobId);
+      setState('ready'); // Wait for user to choose batch size
     } catch (err) {
       const msg = err.response?.data?.error || err.message || 'Upload failed';
       setError(msg);
       setState('error');
     }
-  }, [pollJobStatus]);
+  }, []);
+
+  const startEnrichment = useCallback(async (batchSize) => {
+    if (!jobId) return;
+
+    try {
+      await axios.post(`/api/upload/${jobId}/start`, { batchSize });
+      setState('processing');
+      pollJobStatus(jobId);
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || 'Failed to start enrichment';
+      setError(msg);
+      setState('error');
+    }
+  }, [jobId, pollJobStatus]);
 
   const downloadFile = useCallback(async () => {
     if (!jobId) return;
@@ -134,6 +144,7 @@ export default function useEnrichment() {
     liveResults,
     error,
     uploadFile,
+    startEnrichment,
     downloadFile,
     reset,
   };
