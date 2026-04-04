@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const { parseCSV, detectEmailColumn } = require('../utils/csvHandler');
 const { createJob } = require('../utils/jobStore');
 const { processJob } = require('../workers/enrichmentWorker');
+const { getAvailableProviders } = require('../services/enrichmentEngine');
 
 const router = express.Router();
 
@@ -78,7 +79,8 @@ router.post('/', upload.single('file'), async (req, res) => {
       emailColumn,
       headers,
       preview: missingEmailRows,
-      message: 'File uploaded. Choose how many rows to enrich.',
+      providers: getAvailableProviders(),
+      message: 'File uploaded. Choose providers and how many rows to enrich.',
     });
   } catch (err) {
     logger.error(`Upload error: ${err.message}`);
@@ -96,7 +98,7 @@ router.post('/', upload.single('file'), async (req, res) => {
 router.post('/:jobId/start', async (req, res) => {
   try {
     const { jobId } = req.params;
-    const { batchSize } = req.body; // 10, 25, 50, 100, or 'all'
+    const { batchSize, providers } = req.body; // batchSize: 10/25/50/100/'all', providers: ['apollo','hunter',...]
 
     const job = require('../utils/jobStore').getJob(jobId);
     if (!job) {
@@ -107,15 +109,16 @@ router.post('/:jobId/start', async (req, res) => {
       return res.status(400).json({ error: 'Job already started' });
     }
 
-    // Store batch size in job data
+    // Store batch size and selected providers in job data
     job.data.batchSize = batchSize || 'all';
+    job.data.providers = providers || null; // null means all providers
 
-    logger.info(`Job ${jobId} starting enrichment with batch size: ${batchSize || 'all'}`);
+    logger.info(`Job ${jobId} starting enrichment with batch size: ${batchSize || 'all'}, providers: ${providers ? providers.join(',') : 'all'}`);
 
     // Fire-and-forget
     processJob(jobId);
 
-    res.json({ jobId, message: 'Enrichment started', batchSize: batchSize || 'all' });
+    res.json({ jobId, message: 'Enrichment started', batchSize: batchSize || 'all', providers: providers || 'all' });
   } catch (err) {
     logger.error(`Start enrichment error: ${err.message}`);
     res.status(500).json({ error: 'Failed to start enrichment' });

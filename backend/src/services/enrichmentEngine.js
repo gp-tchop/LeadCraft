@@ -101,7 +101,29 @@ async function findDomainForCompany(companyName) {
  * Enrich a single contact row — find a missing email.
  * Returns { email, provider, confidence, verified } or null.
  */
-async function enrichContact(row, emailColumn) {
+/**
+ * Get the list of all available providers with their config status.
+ */
+function getAvailableProviders() {
+  return PROVIDERS.map((p) => {
+    let configured = true;
+    if (p.name === 'apollo') configured = !!process.env.APOLLO_API_KEY;
+    else if (p.name === 'hunter') configured = !!process.env.HUNTER_API_KEY;
+    else if (p.name === 'rocketreach') configured = !!process.env.ROCKETREACH_API_KEY;
+    else if (p.name === 'clay') configured = !!process.env.CLAY_API_KEY;
+    else if (p.name === 'webscrape') configured = true; // always available
+    return { name: p.name, configured };
+  });
+}
+
+/**
+ * Enrich a single contact row — find a missing email.
+ * @param {Object} row - CSV row
+ * @param {string} emailColumn - email column name
+ * @param {string[]|null} selectedProviders - provider names to use, or null for all
+ * Returns { email, provider, confidence, verified } or null.
+ */
+async function enrichContact(row, emailColumn, selectedProviders) {
   const existingEmail = (row[emailColumn] || '').trim();
   if (existingEmail && isValidEmailFormat(existingEmail)) {
     return null; // Already has a valid email — skip
@@ -120,16 +142,26 @@ async function enrichContact(row, emailColumn) {
     return null;
   }
 
+  // Filter providers if selection was made
+  const activeProviders = selectedProviders
+    ? PROVIDERS.filter((p) => selectedProviders.includes(p.name))
+    : PROVIDERS;
+
+  if (activeProviders.length === 0) {
+    logger.warn('No providers selected');
+    return null;
+  }
+
   const mode = process.env.ENRICHMENT_MODE || 'sequential';
 
   if (mode === 'parallel') {
-    return enrichParallel(contact);
+    return enrichParallel(contact, activeProviders);
   }
-  return enrichSequential(contact);
+  return enrichSequential(contact, activeProviders);
 }
 
-async function enrichSequential(contact) {
-  for (const provider of PROVIDERS) {
+async function enrichSequential(contact, providers) {
+  for (const provider of providers) {
     try {
       logger.info(`Trying provider: ${provider.name} for ${contact.firstName} ${contact.lastName}`);
       const email = await provider.findEmail(contact);
@@ -156,9 +188,9 @@ async function enrichSequential(contact) {
   return null;
 }
 
-async function enrichParallel(contact) {
+async function enrichParallel(contact, providers) {
   const results = await Promise.allSettled(
-    PROVIDERS.map(async (provider) => {
+    providers.map(async (provider) => {
       logger.info(`Trying provider: ${provider.name} for ${contact.firstName} ${contact.lastName}`);
       const email = await provider.findEmail(contact);
       if (email && isValidEmailFormat(email)) {
@@ -193,4 +225,4 @@ async function enrichParallel(contact) {
   return best;
 }
 
-module.exports = { enrichContact, extractContactInfo };
+module.exports = { enrichContact, extractContactInfo, getAvailableProviders };

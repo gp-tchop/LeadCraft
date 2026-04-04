@@ -87,6 +87,7 @@ export default function Home() {
             {state === 'ready' && uploadInfo && (
               <BatchSelector
                 missingEmails={uploadInfo.missingEmails}
+                providers={uploadInfo.providers}
                 onSelect={startEnrichment}
               />
             )}

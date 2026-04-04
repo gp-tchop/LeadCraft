@@ -16,7 +16,7 @@ async function processJob(jobId) {
   try {
     updateJob(jobId, { state: 'active' });
 
-    const { inputFile, batchSize } = job.data;
+    const { inputFile, batchSize, providers: selectedProviders } = job.data;
     logger.info(`Starting enrichment job ${jobId}, batchSize: ${batchSize || 'all'}`);
 
     const { headers, rows } = await parseCSV(inputFile);
@@ -65,7 +65,7 @@ async function processJob(jobId) {
     const tasks = rowsToProcess.map(({ row, index }) => {
       return concurrencyLimit(async () => {
         try {
-          const result = await enrichContact(row, emailColumn);
+          const result = await enrichContact(row, emailColumn, selectedProviders);
 
           if (result && result.email) {
             row[emailColumn] = result.email;

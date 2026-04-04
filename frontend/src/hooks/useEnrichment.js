@@ -89,11 +89,11 @@ export default function useEnrichment() {
     }
   }, []);
 
-  const startEnrichment = useCallback(async (batchSize) => {
+  const startEnrichment = useCallback(async (batchSize, providers) => {
     if (!jobId) return;
 
     try {
-      await axios.post(`/api/upload/${jobId}/start`, { batchSize });
+      await axios.post(`/api/upload/${jobId}/start`, { batchSize, providers });
       setState('processing');
       pollJobStatus(jobId);
     } catch (err) {
