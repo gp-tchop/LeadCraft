@@ -1,0 +1,196 @@
+const axios = require('axios');
+const logger = require('../utils/logger');
+const { isValidEmailFormat, verifyEmail, confidenceLevel } = require('../utils/emailValidator');
+
+// Import all providers
+const apolloProvider = require('./apolloProvider');
+const hunterProvider = require('./hunterProvider');
+const rocketreachProvider = require('./rocketreachProvider');
+const clayProvider = require('./clayProvider');
+const webScrapeProvider = require('./webScrapeProvider');
+
+const PROVIDERS = [
+  apolloProvider,
+  clayProvider,
+  hunterProvider,
+  rocketreachProvider,
+  webScrapeProvider,
+];
+
+/**
+ * Extract contact info from a CSV row by detecting common column names.
+ */
+function extractContactInfo(row) {
+  const cols = Object.keys(row);
+  const get = (...keys) => {
+    for (const key of keys) {
+      for (const col of cols) {
+        if (col.trim().toLowerCase().replace(/[_\s]/g, '') === key.toLowerCase().replace(/[_\s]/g, '')) {
+          const val = (row[col] || '').trim();
+          if (val) return val;
+        }
+      }
+    }
+    return '';
+  };
+
+  // Try to extract first/last name from various column naming conventions
+  let firstName = get(
+    'first_name', 'firstname', 'first name', 'fname',
+    'payload_firstname', 'First Name'
+  );
+  let lastName = get(
+    'last_name', 'lastname', 'last name', 'lname',
+    'payload_lastname', 'Last Name'
+  );
+
+  if (!firstName && !lastName) {
+    const fullName = get('name', 'full_name', 'fullname', 'full name', 'contact_name', 'contact');
+    if (fullName) {
+      const parts = fullName.split(/\s+/);
+      firstName = parts[0] || '';
+      lastName = parts.slice(1).join(' ') || '';
+    }
+  }
+
+  const company = get(
+    'company', 'company_name', 'organization', 'org', 'employer',
+    'account_name', 'payload_companyname', 'companyname', 'companyName'
+  );
+  let domain = get(
+    'domain', 'company_domain', 'website', 'url'
+  );
+
+  // Extract domain from URL if needed
+  if (domain && !domain.includes('@')) {
+    domain = domain.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+  }
+
+  return { firstName, lastName, company, domain };
+}
+
+/**
+ * Try to find a company's domain using Hunter's domain-search
+ * or by checking payload_email from other rows, etc.
+ */
+async function findDomainForCompany(companyName) {
+  if (!companyName) return null;
+
+  // Try Hunter.io company domain search
+  const hunterKey = process.env.HUNTER_API_KEY;
+  if (hunterKey) {
+    try {
+      const resp = await axios.get('https://api.hunter.io/v2/domain-search', {
+        params: { api_key: hunterKey, company: companyName, limit: 1 },
+        timeout: 8000,
+      });
+      const domain = resp.data?.data?.domain;
+      if (domain) {
+        logger.info(`Found domain for "${companyName}": ${domain}`);
+        return domain;
+      }
+    } catch (err) {
+      logger.warn(`Hunter domain-search error for "${companyName}": ${err.message}`);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Enrich a single contact row — find a missing email.
+ * Returns { email, provider, confidence, verified } or null.
+ */
+async function enrichContact(row, emailColumn) {
+  const existingEmail = (row[emailColumn] || '').trim();
+  if (existingEmail && isValidEmailFormat(existingEmail)) {
+    return null; // Already has a valid email — skip
+  }
+
+  const contact = extractContactInfo(row);
+
+  // If no domain, try to find one from the company name
+  if (!contact.domain && contact.company) {
+    const foundDomain = await findDomainForCompany(contact.company);
+    if (foundDomain) contact.domain = foundDomain;
+  }
+
+  if (!contact.firstName && !contact.lastName) {
+    logger.warn('Skipping row: no name information found');
+    return null;
+  }
+
+  const mode = process.env.ENRICHMENT_MODE || 'sequential';
+
+  if (mode === 'parallel') {
+    return enrichParallel(contact);
+  }
+  return enrichSequential(contact);
+}
+
+async function enrichSequential(contact) {
+  for (const provider of PROVIDERS) {
+    try {
+      logger.info(`Trying provider: ${provider.name} for ${contact.firstName} ${contact.lastName}`);
+      const email = await provider.findEmail(contact);
+
+      if (email && isValidEmailFormat(email)) {
+        const verification = await verifyEmail(email);
+        const confidence = confidenceLevel(provider.name, verification.score);
+
+        logger.info(`Found email via ${provider.name}: ${email} (confidence: ${confidence})`);
+        return {
+          email,
+          provider: provider.name,
+          confidence,
+          verified: verification.valid,
+          verificationReason: verification.reason,
+        };
+      }
+    } catch (err) {
+      logger.error(`Provider ${provider.name} failed: ${err.message}`);
+    }
+  }
+
+  logger.info(`No email found for ${contact.firstName} ${contact.lastName}`);
+  return null;
+}
+
+async function enrichParallel(contact) {
+  const results = await Promise.allSettled(
+    PROVIDERS.map(async (provider) => {
+      logger.info(`Trying provider: ${provider.name} for ${contact.firstName} ${contact.lastName}`);
+      const email = await provider.findEmail(contact);
+      if (email && isValidEmailFormat(email)) {
+        const verification = await verifyEmail(email);
+        return {
+          email,
+          provider: provider.name,
+          confidence: confidenceLevel(provider.name, verification.score),
+          verified: verification.valid,
+          verificationReason: verification.reason,
+        };
+      }
+      return null;
+    })
+  );
+
+  // Collect successful results and pick the one with highest confidence
+  const successes = results
+    .filter((r) => r.status === 'fulfilled' && r.value)
+    .map((r) => r.value);
+
+  if (successes.length === 0) {
+    logger.info(`No email found for ${contact.firstName} ${contact.lastName}`);
+    return null;
+  }
+
+  const rank = { high: 3, medium: 2, low: 1 };
+  successes.sort((a, b) => (rank[b.confidence] || 0) - (rank[a.confidence] || 0));
+  const best = successes[0];
+
+  logger.info(`Best email via ${best.provider}: ${best.email} (confidence: ${best.confidence})`);
+  return best;
+}
+
+module.exports = { enrichContact, extractContactInfo };

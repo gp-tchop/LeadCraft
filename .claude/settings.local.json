@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where node:*)",
+      "Bash(where npm:*)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Read(//c/Users/patwa/Desktop/Tchop/LeadCraft/$APPDATA/**)",
+      "Read(//c/Users/patwa/Desktop/Tchop/LeadCraft/$HOME/AppData/Roaming/**)",
+      "Read(//c//**)",
+      "Read(//c/Users/patwa/Desktop/Tchop/LeadCraft/$LOCALAPPDATA/**)",
+      "Bash(cmd //c \"where node\")",
+      "Bash(cmd //c \"where npm\")",
+      "Bash(powershell.exe -Command \"Get-Command node -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source; Get-Command npm -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
+      "Bash(export PATH=\"$PATH:/c/Program Files/nodejs\")",
+      "Bash(npm --version)",
+      "Bash(npm install:*)",
+      "Bash(redis-cli ping:*)",
+      "Bash(powershell.exe -Command \"Get-Command redis-server -ErrorAction SilentlyContinue\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(curl -s -X POST http://localhost:3001/api/upload -F \"file=@C:/Users/patwa/Desktop/Tchop/LeadCraft/backend/sample.csv\")",
+      "Bash(head -2 \"C:/Users/patwa/Desktop/Tchop/LeadCraft/backend/uploads/0483bf1d-7045-4fd5-a8bb-2466855d917d_leads \\(1\\).csv\")",
+      "Bash(head -1 \"C:/Users/patwa/Desktop/Tchop/LeadCraft/backend/uploads/0483bf1d-7045-4fd5-a8bb-2466855d917d_leads \\(1\\).csv\")",
+      "Bash(git --version)",
+      "Bash(gh --version)"
+    ]
+  }
+}

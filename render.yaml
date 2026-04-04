@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: leadcraft
+    runtime: node
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3001"
+      - key: APOLLO_API_KEY
+        sync: false
+      - key: HUNTER_API_KEY
+        sync: false
+      - key: ROCKETREACH_API_KEY
+        sync: false
+      - key: CLAY_API_KEY
+        sync: false

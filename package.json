@@ -1,0 +1,14 @@
+{
+  "name": "leadcraft",
+  "version": "1.0.0",
+  "description": "Automated Email Enrichment App",
+  "scripts": {
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "build:frontend": "cd frontend && npx next build",
+    "start": "cd backend && node src/index.js",
+    "build": "npm run install:all && npm run build:frontend"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
