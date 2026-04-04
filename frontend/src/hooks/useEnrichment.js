@@ -10,6 +10,7 @@ export default function useEnrichment() {
   const [progress, setProgress] = useState(null);
   const [result, setResult] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [liveResults, setLiveResults] = useState([]);
   const [error, setError] = useState(null);
   const pollRef = useRef(null);
 
@@ -28,10 +29,20 @@ export default function useEnrichment() {
 
         setProgress(data.progress);
 
+        // Update live results from enrichmentLog
+        if (data.enrichmentLog) {
+          setLiveResults(data.enrichmentLog);
+        }
+
         if (data.state === 'completed') {
           stopPolling();
           setResult(data.result);
           setState('complete');
+
+          // Set final enrichment log as live results
+          if (data.result?.enrichmentLog) {
+            setLiveResults(data.result.enrichmentLog);
+          }
 
           // Fetch preview of enriched rows
           try {
@@ -58,6 +69,7 @@ export default function useEnrichment() {
     setResult(null);
     setPreview(null);
     setProgress(null);
+    setLiveResults([]);
 
     try {
       const formData = new FormData();
@@ -108,6 +120,7 @@ export default function useEnrichment() {
     setProgress(null);
     setResult(null);
     setPreview(null);
+    setLiveResults([]);
     setError(null);
   }, [stopPolling]);
 
@@ -118,6 +131,7 @@ export default function useEnrichment() {
     progress,
     result,
     preview,
+    liveResults,
     error,
     uploadFile,
     downloadFile,

@@ -22,56 +22,6 @@ export default function ResultsPanel({ result, preview, onDownload, onReset }) {
         </div>
       </div>
 
-      {/* Preview of enriched rows */}
-      {preview && preview.enrichedRows && preview.enrichedRows.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-          <h3 className="font-semibold text-gray-800 mb-4">
-            Enriched Rows Preview
-          </h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-2 font-medium text-gray-600">Row #</th>
-                  <th className="px-4 py-2 font-medium text-gray-600">Email Found</th>
-                  <th className="px-4 py-2 font-medium text-gray-600">Provider</th>
-                  <th className="px-4 py-2 font-medium text-gray-600">Confidence</th>
-                  <th className="px-4 py-2 font-medium text-gray-600">Verified</th>
-                </tr>
-              </thead>
-              <tbody>
-                {preview.enrichedRows.slice(0, 50).map((row, i) => (
-                  <tr key={i} className="border-t border-gray-100">
-                    <td className="px-4 py-2 text-gray-600">{row.rowIndex + 1}</td>
-                    <td className="px-4 py-2 font-mono text-gray-800">{row.email}</td>
-                    <td className="px-4 py-2">
-                      <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
-                        {row.provider}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2">
-                      <ConfidenceBadge level={row.confidence} />
-                    </td>
-                    <td className="px-4 py-2">
-                      {row.verified ? (
-                        <span className="text-green-600 text-xs font-medium">Yes</span>
-                      ) : (
-                        <span className="text-gray-400 text-xs">No</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {preview.enrichedRows.length > 50 && (
-              <p className="text-sm text-gray-400 mt-2 text-center">
-                Showing first 50 of {preview.enrichedRows.length} enriched rows
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Actions */}
       <div className="flex gap-3">
         <button
@@ -97,23 +47,5 @@ function StatBox({ label, value, color }) {
       <p className="text-gray-500 text-sm">{label}</p>
       <p className={`font-bold text-xl ${color}`}>{value}</p>
     </div>
-  );
-}
-
-function ConfidenceBadge({ level }) {
-  const styles = {
-    high: 'bg-green-100 text-green-700',
-    medium: 'bg-yellow-100 text-yellow-700',
-    low: 'bg-red-100 text-red-700',
-  };
-
-  return (
-    <span
-      className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
-        styles[level] || 'bg-gray-100 text-gray-600'
-      }`}
-    >
-      {level || 'unknown'}
-    </span>
   );
 }

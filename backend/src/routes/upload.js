@@ -67,13 +67,18 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     logger.info(`Job ${jobId} started: ${totalRows} rows, ${missingEmails} missing emails`);
 
+    // Build preview: all rows with missing emails
+    const missingEmailRows = rows
+      .map((row, index) => ({ ...row, __rowIndex: index }))
+      .filter((r) => !(r[emailColumn] || '').trim());
+
     res.json({
       jobId,
       totalRows,
       missingEmails,
       emailColumn,
       headers,
-      preview: rows.slice(0, 5),
+      preview: missingEmailRows,
       message: 'File uploaded and enrichment job started.',
     });
   } catch (err) {

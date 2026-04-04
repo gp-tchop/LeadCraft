@@ -23,6 +23,11 @@ router.get('/:jobId/status', async (req, res) => {
       progress: job.progress,
     };
 
+    // Include live enrichment log during processing
+    if (job.state === 'active' && job.progress?.enrichmentLog) {
+      response.enrichmentLog = job.progress.enrichmentLog;
+    }
+
     if (job.state === 'completed') {
       response.result = job.returnvalue;
       response.downloadUrl = `/api/download/${job.returnvalue?.outputFile}`;

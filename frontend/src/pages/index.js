@@ -12,6 +12,7 @@ export default function Home() {
     progress,
     result,
     preview,
+    liveResults,
     error,
     uploadFile,
     downloadFile,
@@ -75,9 +76,9 @@ export default function Home() {
               </div>
             )}
 
-            {/* Upload Info */}
+            {/* Upload Info with live results */}
             {(state === 'processing' || state === 'complete') && (
-              <UploadInfo info={uploadInfo} />
+              <UploadInfo info={uploadInfo} liveResults={liveResults} />
             )}
 
             {/* Progress */}

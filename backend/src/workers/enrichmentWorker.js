@@ -90,18 +90,17 @@ async function processJob(jobId) {
         }
 
         processed++;
-        if (processed % 5 === 0 || processed === rowsNeedingEnrichment.length) {
-          updateJob(jobId, {
-            progress: {
-              phase: 'processing',
-              total: totalRows,
-              needEnrichment: rowsNeedingEnrichment.length,
-              processed,
-              enriched,
-              failed,
-            },
-          });
-        }
+        updateJob(jobId, {
+          progress: {
+            phase: 'processing',
+            total: totalRows,
+            needEnrichment: rowsNeedingEnrichment.length,
+            processed,
+            enriched,
+            failed,
+            enrichmentLog: [...enrichmentLog],
+          },
+        });
       });
     });
 
