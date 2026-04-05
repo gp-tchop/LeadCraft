@@ -20,10 +20,16 @@ async function processJob(jobId) {
     logger.info(`Starting enrichment job ${jobId}, batchSize: ${batchSize || 'all'}`);
 
     const { headers, rows } = await parseCSV(inputFile);
-    const emailColumn = detectEmailColumn(headers);
+    let emailColumn = detectEmailColumn(headers);
 
+    // If no email column exists, create one so enrichment can populate it
     if (!emailColumn) {
-      throw new Error('Could not detect email column.');
+      emailColumn = 'email';
+      headers.push(emailColumn);
+      for (const row of rows) {
+        row[emailColumn] = '';
+      }
+      logger.info(`Job ${jobId}: No email column found — added "${emailColumn}" column`);
     }
 
     const totalRows = rows.length;

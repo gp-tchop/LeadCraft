@@ -7,6 +7,9 @@ const apolloProvider = require('./apolloProvider');
 const hunterProvider = require('./hunterProvider');
 const rocketreachProvider = require('./rocketreachProvider');
 const clayProvider = require('./clayProvider');
+const serperProvider = require('./serperProvider');
+const instantlyProvider = require('./instantlyProvider');
+const lemlistProvider = require('./lemlistProvider');
 const webScrapeProvider = require('./webScrapeProvider');
 
 const PROVIDERS = [
@@ -14,6 +17,9 @@ const PROVIDERS = [
   clayProvider,
   hunterProvider,
   rocketreachProvider,
+  serperProvider,
+  instantlyProvider,
+  lemlistProvider,
   webScrapeProvider,
 ];
 
@@ -111,6 +117,9 @@ function getAvailableProviders() {
     else if (p.name === 'hunter') configured = !!process.env.HUNTER_API_KEY;
     else if (p.name === 'rocketreach') configured = !!process.env.ROCKETREACH_API_KEY;
     else if (p.name === 'clay') configured = !!process.env.CLAY_API_KEY;
+    else if (p.name === 'serper') configured = !!process.env.SERPER_API_KEY;
+    else if (p.name === 'instantly') configured = !!process.env.INSTANTLY_API_KEY;
+    else if (p.name === 'lemlist') configured = !!process.env.LEMLIST_API_KEY;
     else if (p.name === 'webscrape') configured = true; // always available
     return { name: p.name, configured };
   });

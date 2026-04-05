@@ -51,12 +51,16 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     // Quick parse to validate and return preview
     const { headers, rows } = await parseCSV(filePath);
-    const emailColumn = detectEmailColumn(headers);
+    let emailColumn = detectEmailColumn(headers);
 
+    // If no email column exists, create one so enrichment can populate it
     if (!emailColumn) {
-      return res.status(400).json({
-        error: 'Could not detect an email column in your CSV. Expected a column named "email", "Email", "e-mail", or similar.',
-      });
+      emailColumn = 'email';
+      headers.push(emailColumn);
+      for (const row of rows) {
+        row[emailColumn] = '';
+      }
+      logger.info(`Job ${jobId}: No email column found — added "${emailColumn}" column`);
     }
 
     const totalRows = rows.length;
