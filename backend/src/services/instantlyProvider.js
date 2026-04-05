@@ -2,8 +2,9 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 /**
- * Find email using Instantly API's lead finder.
- * Instantly provides email verification and lead enrichment.
+ * Find email using Instantly SuperSearch API.
+ * Uses preview to find lead, then enrich to get email.
+ * Docs: https://developer.instantly.ai/api/v2/supersearchenrichment
  */
 async function findEmail(contact) {
   const apiKey = process.env.INSTANTLY_API_KEY;
@@ -15,15 +16,24 @@ async function findEmail(contact) {
   const { firstName, lastName, company, domain } = contact;
   if (!firstName && !lastName) return null;
 
+  const name = `${firstName} ${lastName}`.trim();
+
   try {
-    // Instantly Lead Finder API
+    // Build search filters
+    const searchFilters = {};
+    if (name) searchFilters.name = [name];
+    if (company) searchFilters.company_name = { include: [company] };
+    if (domain) searchFilters.domains = [domain];
+
+    // Use enrich-leads-from-supersearch with email enrichment enabled
     const resp = await axios.post(
-      'https://api.instantly.ai/api/v2/lead-finder/enrich',
+      'https://api.instantly.ai/api/v2/supersearch-enrichment/enrich-leads-from-supersearch',
       {
-        first_name: firstName,
-        last_name: lastName,
-        company_name: company || undefined,
-        domain: domain || undefined,
+        search_filters: searchFilters,
+        limit: 1,
+        work_email_enrichment: true,
+        skip_rows_without_email: true,
+        list_name: `LeadCraft - ${name}`,
       },
       {
         headers: {
@@ -34,45 +44,53 @@ async function findEmail(contact) {
       }
     );
 
-    const email = resp.data?.email || resp.data?.data?.email || null;
-    if (email) {
-      logger.info(`Instantly: found email for ${firstName} ${lastName}: ${email}`);
-      return email;
+    // The enrichment is async — check if we got an immediate result
+    const enrichmentId = resp.data?.id;
+    if (!enrichmentId) {
+      logger.warn('Instantly: no enrichment ID returned');
+      return null;
     }
-  } catch (err) {
-    logger.warn(`Instantly enrich error: ${err.response?.status} ${err.message}`);
-  }
 
-  // Fallback: Try the search/leads endpoint
-  try {
-    const searchParams = {
-      first_name: firstName,
-      last_name: lastName,
-    };
-    if (company) searchParams.company_name = company;
-    if (domain) searchParams.domain = domain;
+    // Poll for enrichment results
+    const maxAttempts = 6;
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    const resp = await axios.get(
-      'https://api.instantly.ai/api/v2/lead-finder/search',
-      {
-        params: searchParams,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-        timeout: parseInt(process.env.PROVIDER_TIMEOUT_MS) || 15000,
+      try {
+        const statusResp = await axios.get(
+          `https://api.instantly.ai/api/v2/supersearch-enrichment/${enrichmentId}`,
+          {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            timeout: 10000,
+          }
+        );
+
+        const leads = statusResp.data?.leads || statusResp.data?.data?.leads || [];
+        if (Array.isArray(leads) && leads.length > 0) {
+          const lead = leads[0];
+          const email = lead.email || lead.work_email;
+          if (email) {
+            logger.info(`Instantly: found email for ${name}: ${email}`);
+            return email;
+          }
+        }
+
+        // Check if status is complete
+        const status = statusResp.data?.status;
+        if (status === 'completed' || status === 'done') {
+          break;
+        }
+      } catch (pollErr) {
+        logger.warn(`Instantly poll error: ${pollErr.response?.status} ${pollErr.message}`);
       }
-    );
-
-    const leads = resp.data?.leads || resp.data?.data || [];
-    if (Array.isArray(leads) && leads.length > 0 && leads[0].email) {
-      logger.info(`Instantly (search): found email for ${firstName} ${lastName}`);
-      return leads[0].email;
     }
-  } catch (err) {
-    logger.warn(`Instantly search error: ${err.response?.status} ${err.message}`);
-  }
 
-  return null;
+    logger.info(`Instantly: no email found for ${name}`);
+    return null;
+  } catch (err) {
+    logger.error(`Instantly API error: ${err.response?.status} ${err.message}`);
+    return null;
+  }
 }
 
 module.exports = { findEmail, name: 'instantly' };
