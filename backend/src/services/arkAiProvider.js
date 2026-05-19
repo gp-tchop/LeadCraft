@@ -3,16 +3,22 @@ const logger = require('../utils/logger');
 
 /**
  * ARK AI provider — uses app.ai-ark.com B2B data enrichment API
- * to find professional email addresses by searching for a person
- * by name + company/domain.
+ * to find verified professional email addresses.
  *
  * Flow:
- *   1. POST /people   — search by name + company/domain → get person ID
- *   2. POST /people/export/single — fetch verified email for that person ID
+ *   1. POST /people   — search by fullName + domain/company → get person ID
+ *   2. POST /people/export/single — get verified email for that person ID
  *
  * Auth: X-TOKEN header
  * Docs: https://docs.ai-ark.com/reference/people-search-1
  *       https://docs.ai-ark.com/reference/people-export-single
+ *
+ * Filter format:
+ *   contact.fullName.any.include = { mode: "SMART", content: ["Name"] }
+ *   account.domain.any.include   = ["domain.com"]          (plain array)
+ *   account.name.any.include     = { mode: "SMART", content: ["Company"] }
+ *
+ * Email response: email.output.address (string) or email.output[].address (array)
  */
 
 const BASE_URL = 'https://api.ai-ark.com/api/developer-portal/v1';
@@ -32,25 +38,31 @@ async function findEmail(contact) {
     'Content-Type': 'application/json',
   };
   const timeout = parseInt(process.env.PROVIDER_TIMEOUT_MS) || 15000;
+  const fullName = [firstName, lastName].filter(Boolean).join(' ');
 
   try {
     // ── Step 1: People Search ──────────────────────────────────────────────
     const searchBody = {
       page: 0,
       size: 1,
+      contact: {
+        fullName: {
+          any: {
+            include: { mode: 'SMART', content: [fullName] },
+          },
+        },
+      },
     };
 
-    // Build contact filter — use fullName if we have both parts
-    const fullName = [firstName, lastName].filter(Boolean).join(' ');
-    if (fullName) {
-      searchBody.contact = { fullName };
-    }
-
-    // Build account filter — prefer domain over company name
+    // Prefer domain filter (exact); fall back to company name
     if (domain) {
-      searchBody.account = { nameOrDomain: domain };
+      searchBody.account = {
+        domain: { any: { include: [domain] } },
+      };
     } else if (company) {
-      searchBody.account = { nameOrDomain: company };
+      searchBody.account = {
+        name: { any: { include: { mode: 'SMART', content: [company] } } },
+      };
     }
 
     logger.info(`ARK AI: searching for "${fullName}" at "${domain || company || 'unknown'}"`);
@@ -61,29 +73,25 @@ async function findEmail(contact) {
       { headers, timeout }
     );
 
-    const people = searchResp.data?.content || searchResp.data?.data || [];
+    const people = searchResp.data?.content || [];
     if (!Array.isArray(people) || people.length === 0) {
       logger.info(`ARK AI: no results for "${fullName}"`);
       return null;
     }
 
-    const personId = people[0]?.id || people[0]?._id;
-    const linkedinUrl = people[0]?.linkedinUrl || people[0]?.linkedin?.url;
+    const person = people[0];
+    const personId = person?.id;
+    const linkedinUrl = person?.link?.linkedin;
 
     if (!personId && !linkedinUrl) {
-      logger.info(`ARK AI: person found but no ID or LinkedIn URL available`);
+      logger.info(`ARK AI: person found but no ID or LinkedIn URL`);
       return null;
     }
 
     logger.info(`ARK AI: found person ID ${personId} for "${fullName}" — fetching email`);
 
     // ── Step 2: Export Single Person with Email ────────────────────────────
-    const exportBody = {};
-    if (personId) {
-      exportBody.id = personId;
-    } else {
-      exportBody.url = linkedinUrl;
-    }
+    const exportBody = personId ? { id: personId } : { url: linkedinUrl };
 
     const exportResp = await axios.post(
       `${BASE_URL}/people/export/single`,
@@ -91,18 +99,26 @@ async function findEmail(contact) {
       { headers, timeout }
     );
 
-    // Email can be at various paths depending on API version
-    const person = exportResp.data;
-    const email =
-      person?.email ||
-      person?.workEmail ||
-      person?.emails?.[0] ||
-      person?.contact?.email ||
-      person?.data?.email;
+    const emailField = exportResp.data?.email;
 
-    if (email && typeof email === 'string' && email.includes('@')) {
-      logger.info(`ARK AI: found email for "${fullName}": ${email}`);
-      return email.trim();
+    // email.output can be a single object or an array
+    let address = null;
+    if (emailField?.output) {
+      const output = emailField.output;
+      if (Array.isArray(output)) {
+        // Pick the first VALID or CATCH_ALL email
+        const best = output.find(
+          (e) => e.status === 'VALID' || e.status === 'CATCH_ALL'
+        ) || output[0];
+        address = best?.address;
+      } else {
+        address = output?.address;
+      }
+    }
+
+    if (address && typeof address === 'string' && address.includes('@')) {
+      logger.info(`ARK AI: found email for "${fullName}": ${address}`);
+      return address.trim();
     }
 
     logger.info(`ARK AI: no email returned for "${fullName}"`);
