@@ -2,8 +2,8 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 /**
- * Find email using Lemlist Enrich API.
- * Uses async enrichment: POST to start, then poll GET for results.
+ * Lemlist provider — uses the Enrich API (async).
+ * POST to start enrichment → poll GET for results.
  * Docs: https://developer.lemlist.com/api-reference/endpoints/enrich
  */
 async function findEmail(contact) {
@@ -17,14 +17,13 @@ async function findEmail(contact) {
   if (!firstName && !lastName) return null;
 
   try {
-    // Build query params for the enrich endpoint
     const params = { findEmail: true };
     if (firstName) params.firstName = firstName;
     if (lastName) params.lastName = lastName;
     if (company) params.companyName = company;
     if (domain) params.companyDomain = domain;
 
-    // Step 1: Start enrichment (async) — uses Basic auth with empty user + apiKey as password
+    // Step 1: Start async enrichment — Basic auth: empty user, API key as password
     const startResp = await axios.post(
       'https://api.lemlist.com/api/enrich',
       null,
@@ -32,18 +31,35 @@ async function findEmail(contact) {
         params,
         auth: { username: '', password: apiKey },
         timeout: parseInt(process.env.PROVIDER_TIMEOUT_MS) || 15000,
+        validateStatus: (s) => s < 500,
       }
     );
 
-    const enrichId = startResp.data?.id || startResp.data?.enrichmentId;
-    if (!enrichId) {
-      logger.warn('Lemlist: no enrichment ID returned');
+    if (startResp.status === 402) {
+      logger.warn('Lemlist: out of credits');
       return null;
     }
 
-    // Step 2: Poll for results (max ~12 seconds with 2s intervals)
-    const maxAttempts = 6;
-    for (let i = 0; i < maxAttempts; i++) {
+    // Sometimes returns the email synchronously
+    if (startResp.status === 200 && startResp.data?.email?.email) {
+      const directEmail = startResp.data.email.email;
+      logger.info(`Lemlist (direct): found email for ${firstName} ${lastName}: ${directEmail}`);
+      return directEmail;
+    }
+
+    // Lemlist uses _id, id, or enrichmentId depending on API version
+    const enrichId =
+      startResp.data?._id ||
+      startResp.data?.id ||
+      startResp.data?.enrichmentId;
+
+    if (!enrichId) {
+      logger.warn(`Lemlist: no enrichment ID in response (status: ${startResp.status})`);
+      return null;
+    }
+
+    // Step 2: Poll for results (max ~12s with 2s intervals)
+    for (let i = 0; i < 6; i++) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
       try {
@@ -52,32 +68,34 @@ async function findEmail(contact) {
           {
             auth: { username: '', password: apiKey },
             timeout: 10000,
+            validateStatus: (s) => s < 500,
           }
         );
 
-        const status = resultResp.data?.enrichmentStatus;
-        if (status === 'done') {
-          const email = resultResp.data?.data?.email?.email;
-          const notFound = resultResp.data?.data?.email?.notFound;
-          if (email && !notFound) {
+        if (resultResp.status === 202) continue; // Still processing
+
+        const data = resultResp.data;
+        const status = data?.enrichmentStatus || data?.status;
+
+        if (status === 'done' || status === 'completed') {
+          const email =
+            data?.data?.email?.email ||
+            data?.email?.email ||
+            data?.result?.email;
+
+          if (email) {
             logger.info(`Lemlist: found email for ${firstName} ${lastName}: ${email}`);
             return email;
           }
-          logger.info(`Lemlist: enrichment done but no email found for ${firstName} ${lastName}`);
+          logger.info(`Lemlist: enrichment done but no email for ${firstName} ${lastName}`);
           return null;
         }
 
-        if (status === 'failed' || status === 'error') {
-          logger.warn(`Lemlist: enrichment failed for ${firstName} ${lastName}`);
+        if (status === 'failed' || status === 'error' || status === 'not_found') {
+          logger.info(`Lemlist: enrichment ${status} for ${firstName} ${lastName}`);
           return null;
         }
-
-        // Still processing — continue polling
       } catch (pollErr) {
-        if (pollErr.response?.status === 202) {
-          // 202 = still in progress, continue polling
-          continue;
-        }
         logger.warn(`Lemlist poll error: ${pollErr.response?.status} ${pollErr.message}`);
       }
     }

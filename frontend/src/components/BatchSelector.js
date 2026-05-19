@@ -1,11 +1,15 @@
 import { useState } from 'react';
 
 const PROVIDER_LABELS = {
-  apollo: 'Apollo',
-  hunter: 'Hunter.io',
-  clay: 'Clay',
+  apollo:      'Apollo',
+  hunter:      'Hunter.io',
   rocketreach: 'RocketReach',
-  webscrape: 'Web Scrape',
+  instantly:   'Instantly',
+  lemlist:     'Lemlist',
+  clay:        'Clay',
+  serper:      'Serper (Google)',
+  arkai:       'ARK AI',
+  webscrape:   'Web Scrape',
 };
 
 export default function BatchSelector({ missingEmails, providers, onSelect }) {

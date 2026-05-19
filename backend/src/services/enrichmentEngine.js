@@ -11,15 +11,20 @@ const serperProvider = require('./serperProvider');
 const instantlyProvider = require('./instantlyProvider');
 const lemlistProvider = require('./lemlistProvider');
 const webScrapeProvider = require('./webScrapeProvider');
+const arkAiProvider = require('./arkAiProvider');
 
+/**
+ * Provider order: highest-quality paid sources first, AI prediction + scrape last.
+ */
 const PROVIDERS = [
   apolloProvider,
-  clayProvider,
   hunterProvider,
   rocketreachProvider,
-  serperProvider,
   instantlyProvider,
   lemlistProvider,
+  clayProvider,
+  serperProvider,
+  arkAiProvider,
   webScrapeProvider,
 ];
 
@@ -40,7 +45,6 @@ function extractContactInfo(row) {
     return '';
   };
 
-  // Try to extract first/last name from various column naming conventions
   let firstName = get(
     'first_name', 'firstname', 'first name', 'fname',
     'payload_firstname', 'First Name'
@@ -63,11 +67,8 @@ function extractContactInfo(row) {
     'company', 'company_name', 'organization', 'org', 'employer',
     'account_name', 'payload_companyname', 'companyname', 'companyName'
   );
-  let domain = get(
-    'domain', 'company_domain', 'website', 'url'
-  );
+  let domain = get('domain', 'company_domain', 'website', 'url');
 
-  // Extract domain from URL if needed
   if (domain && !domain.includes('@')) {
     domain = domain.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
   }
@@ -76,13 +77,11 @@ function extractContactInfo(row) {
 }
 
 /**
- * Try to find a company's domain using Hunter's domain-search
- * or by checking payload_email from other rows, etc.
+ * Try to find a company's domain via Hunter.io domain-search.
  */
 async function findDomainForCompany(companyName) {
   if (!companyName) return null;
 
-  // Try Hunter.io company domain search
   const hunterKey = process.env.HUNTER_API_KEY;
   if (hunterKey) {
     try {
@@ -104,23 +103,23 @@ async function findDomainForCompany(companyName) {
 }
 
 /**
- * Enrich a single contact row — find a missing email.
- * Returns { email, provider, confidence, verified } or null.
- */
-/**
  * Get the list of all available providers with their config status.
  */
 function getAvailableProviders() {
   return PROVIDERS.map((p) => {
     let configured = true;
-    if (p.name === 'apollo') configured = !!process.env.APOLLO_API_KEY;
-    else if (p.name === 'hunter') configured = !!process.env.HUNTER_API_KEY;
-    else if (p.name === 'rocketreach') configured = !!process.env.ROCKETREACH_API_KEY;
-    else if (p.name === 'clay') configured = !!process.env.CLAY_API_KEY;
-    else if (p.name === 'serper') configured = !!process.env.SERPER_API_KEY;
-    else if (p.name === 'instantly') configured = !!process.env.INSTANTLY_API_KEY;
-    else if (p.name === 'lemlist') configured = !!process.env.LEMLIST_API_KEY;
-    else if (p.name === 'webscrape') configured = true; // always available
+    switch (p.name) {
+      case 'apollo':      configured = !!process.env.APOLLO_API_KEY; break;
+      case 'hunter':      configured = !!process.env.HUNTER_API_KEY; break;
+      case 'rocketreach': configured = !!process.env.ROCKETREACH_API_KEY; break;
+      case 'clay':        configured = !!process.env.CLAY_WEBHOOK_URL; break;
+      case 'serper':      configured = !!process.env.SERPER_API_KEY; break;
+      case 'instantly':   configured = !!process.env.INSTANTLY_API_KEY; break;
+      case 'lemlist':     configured = !!process.env.LEMLIST_API_KEY; break;
+      case 'arkai':       configured = !!process.env.ARK_AI_API_KEY; break;
+      case 'webscrape':   configured = true; break; // always available
+      default:            configured = true;
+    }
     return { name: p.name, configured };
   });
 }
@@ -130,17 +129,15 @@ function getAvailableProviders() {
  * @param {Object} row - CSV row
  * @param {string} emailColumn - email column name
  * @param {string[]|null} selectedProviders - provider names to use, or null for all
- * Returns { email, provider, confidence, verified } or null.
  */
 async function enrichContact(row, emailColumn, selectedProviders) {
   const existingEmail = (row[emailColumn] || '').trim();
   if (existingEmail && isValidEmailFormat(existingEmail)) {
-    return null; // Already has a valid email — skip
+    return null; // Already has a valid email
   }
 
   const contact = extractContactInfo(row);
 
-  // If no domain, try to find one from the company name
   if (!contact.domain && contact.company) {
     const foundDomain = await findDomainForCompany(contact.company);
     if (foundDomain) contact.domain = foundDomain;
@@ -151,7 +148,6 @@ async function enrichContact(row, emailColumn, selectedProviders) {
     return null;
   }
 
-  // Filter providers if selection was made
   const activeProviders = selectedProviders
     ? PROVIDERS.filter((p) => selectedProviders.includes(p.name))
     : PROVIDERS;
@@ -162,11 +158,9 @@ async function enrichContact(row, emailColumn, selectedProviders) {
   }
 
   const mode = process.env.ENRICHMENT_MODE || 'sequential';
-
-  if (mode === 'parallel') {
-    return enrichParallel(contact, activeProviders);
-  }
-  return enrichSequential(contact, activeProviders);
+  return mode === 'parallel'
+    ? enrichParallel(contact, activeProviders)
+    : enrichSequential(contact, activeProviders);
 }
 
 async function enrichSequential(contact, providers) {
@@ -216,7 +210,6 @@ async function enrichParallel(contact, providers) {
     })
   );
 
-  // Collect successful results and pick the one with highest confidence
   const successes = results
     .filter((r) => r.status === 'fulfilled' && r.value)
     .map((r) => r.value);

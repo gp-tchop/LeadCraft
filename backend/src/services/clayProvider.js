@@ -2,63 +2,58 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 /**
- * Find email using Clay API / webhook enrichment.
- * Clay can be configured via a webhook URL or direct API.
- * @param {object} contact - { firstName, lastName, company, domain }
- * @returns {string|null}
+ * Clay provider — webhook-based enrichment only.
+ *
+ * Set CLAY_WEBHOOK_URL to a Clay table webhook that accepts
+ * first_name, last_name, company, domain and returns an email field.
+ * CLAY_API_KEY is sent as a Bearer token if set.
+ *
+ * Clay does not expose a direct public REST enrichment API;
+ * you must create a Clay table workflow and use its inbound webhook URL.
  */
 async function findEmail(contact) {
-  const apiKey = process.env.CLAY_API_KEY;
   const webhookUrl = process.env.CLAY_WEBHOOK_URL;
+  const apiKey = process.env.CLAY_API_KEY;
 
-  if (!apiKey && !webhookUrl) {
-    logger.warn('Clay API key and webhook URL not configured');
+  if (!webhookUrl) {
+    logger.warn('Clay: CLAY_WEBHOOK_URL not configured — skipping');
     return null;
   }
 
   try {
-    let resp;
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-    if (webhookUrl) {
-      // Clay webhook mode
-      resp = await axios.post(
-        webhookUrl,
-        {
-          first_name: contact.firstName,
-          last_name: contact.lastName,
-          company: contact.company,
-          domain: contact.domain,
-        },
-        {
-          headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-          timeout: parseInt(process.env.PROVIDER_TIMEOUT_MS) || 15000,
-        }
-      );
-    } else {
-      // Clay direct API
-      resp = await axios.post(
-        'https://api.clay.com/v1/enrich/email',
-        {
-          first_name: contact.firstName,
-          last_name: contact.lastName,
-          company: contact.company,
-          domain: contact.domain,
-        },
-        {
-          headers: { Authorization: `Bearer ${apiKey}` },
-          timeout: parseInt(process.env.PROVIDER_TIMEOUT_MS) || 15000,
-        }
-      );
-    }
+    const resp = await axios.post(
+      webhookUrl,
+      {
+        first_name: contact.firstName,
+        last_name: contact.lastName,
+        company: contact.company || '',
+        domain: contact.domain || '',
+      },
+      {
+        headers,
+        timeout: parseInt(process.env.PROVIDER_TIMEOUT_MS) || 15000,
+      }
+    );
 
-    const email = resp.data?.email || resp.data?.data?.email || null;
+    // Support common response shapes from Clay webhooks
+    const email =
+      resp.data?.email ||
+      resp.data?.data?.email ||
+      resp.data?.result?.email ||
+      resp.data?.enriched_email ||
+      null;
+
     if (email) {
       logger.info(`Clay: found email for ${contact.firstName} ${contact.lastName}`);
       return email;
     }
+
     return null;
   } catch (err) {
-    logger.error(`Clay API error: ${err.message}`);
+    logger.error(`Clay webhook error: ${err.response?.status} ${err.message}`);
     return null;
   }
 }

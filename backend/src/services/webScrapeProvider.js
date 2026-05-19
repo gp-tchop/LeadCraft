@@ -3,103 +3,96 @@ const cheerio = require('cheerio');
 const logger = require('../utils/logger');
 const { isValidEmailFormat } = require('../utils/emailValidator');
 
-const EMAIL_PATTERN = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 /**
- * Attempt to find an email by scraping publicly available web pages.
- * This is a last-resort fallback.
- * @param {object} contact - { firstName, lastName, company, domain }
- * @returns {string|null}
+ * WebScrape provider — scrapes company website pages to find emails.
+ * Last-resort fallback. Only returns emails actually found on the page
+ * (no unverified pattern guessing).
  */
 async function findEmail(contact) {
+  const { domain } = contact;
   const fullName = `${contact.firstName} ${contact.lastName}`.trim();
-  const company = contact.company || '';
-  const domain = contact.domain || '';
 
   if (!fullName) return null;
+  if (!domain) return null;
 
-  // Strategy 1: Try company website contact/about/team pages
-  if (domain) {
-    const email = await scrapeCompanyWebsite(domain, contact);
-    if (email) return email;
-  }
-
-  // Strategy 2: Generate common email patterns and check via domain
-  if (domain) {
-    const guessed = generateEmailGuesses(contact, domain);
-    if (guessed.length > 0) {
-      logger.info(`WebScrape: returning pattern-generated email for ${fullName}`);
-      return guessed[0]; // Return the most common pattern
-    }
-  }
-
-  return null;
+  return scrapeCompanyWebsite(domain, contact);
 }
 
 async function scrapeCompanyWebsite(domain, contact) {
   const pages = [
-    `https://${domain}/about`,
     `https://${domain}/team`,
+    `https://${domain}/about`,
     `https://${domain}/contact`,
     `https://${domain}/about-us`,
+    `https://${domain}/our-team`,
+    `https://${domain}/people`,
   ];
+
+  const firstName = contact.firstName?.toLowerCase();
+  const lastName = contact.lastName?.toLowerCase();
 
   for (const url of pages) {
     try {
       const resp = await axios.get(url, {
         timeout: 8000,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; LeadCraft/1.0; email-enrichment)',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml',
         },
         maxRedirects: 3,
-        validateStatus: (status) => status < 400,
+        validateStatus: (s) => s < 400,
       });
 
       const $ = cheerio.load(resp.data);
+
+      // Check page text + mailto links for matching emails
+      const emailsFound = new Set();
+
+      // From mailto: links (most reliable)
+      $('a[href^="mailto:"]').each((_, el) => {
+        const href = $(el).attr('href') || '';
+        const email = href.replace('mailto:', '').split('?')[0].trim();
+        if (isValidEmailFormat(email)) emailsFound.add(email.toLowerCase());
+      });
+
+      // From visible text
       const text = $('body').text();
-      const matches = text.match(EMAIL_PATTERN) || [];
+      const matches = text.match(EMAIL_REGEX) || [];
+      matches.forEach((e) => {
+        if (isValidEmailFormat(e)) emailsFound.add(e.toLowerCase());
+      });
 
-      // Filter for emails matching the contact's name
-      const firstName = contact.firstName?.toLowerCase();
-      const lastName = contact.lastName?.toLowerCase();
+      // Filter: email must contain first or last name fragment (or domain match)
+      for (const email of emailsFound) {
+        const local = email.split('@')[0];
+        const emailDomain = email.split('@')[1];
 
-      for (const email of matches) {
-        const lower = email.toLowerCase();
-        if (
-          (firstName && lower.includes(firstName)) ||
-          (lastName && lower.includes(lastName))
-        ) {
-          if (isValidEmailFormat(email)) {
-            logger.info(`WebScrape: found matching email on ${url}`);
-            return email;
-          }
+        // Skip generic emails (info@, hello@, support@, etc.)
+        const generic = ['info', 'hello', 'support', 'contact', 'admin', 'sales', 'help', 'team', 'mail', 'office'];
+        if (generic.some((g) => local === g)) continue;
+
+        // Must be on the correct domain
+        if (domain && !emailDomain?.includes(domain.replace(/^www\./, ''))) continue;
+
+        const matchesName =
+          (firstName && local.includes(firstName)) ||
+          (lastName && local.includes(lastName));
+
+        if (matchesName) {
+          logger.info(`WebScrape: found matching email on ${url}: ${email}`);
+          return email;
         }
       }
     } catch {
-      // Page doesn't exist or blocked — continue
+      // Page not found or blocked — try next
     }
   }
+
   return null;
-}
-
-/**
- * Generate common email format guesses.
- * Returns array sorted by most common patterns first.
- */
-function generateEmailGuesses(contact, domain) {
-  const first = (contact.firstName || '').toLowerCase().replace(/[^a-z]/g, '');
-  const last = (contact.lastName || '').toLowerCase().replace(/[^a-z]/g, '');
-
-  if (!first || !last) return [];
-
-  return [
-    `${first}.${last}@${domain}`,
-    `${first}${last}@${domain}`,
-    `${first[0]}${last}@${domain}`,
-    `${first}@${domain}`,
-    `${first}_${last}@${domain}`,
-    `${first[0]}.${last}@${domain}`,
-  ];
 }
 
 module.exports = { findEmail, name: 'webscrape' };

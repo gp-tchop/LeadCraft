@@ -2,9 +2,10 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 /**
- * Find email using Instantly SuperSearch API.
- * Uses preview to find lead, then enrich to get email.
+ * Instantly provider — uses the SuperSearch enrichment API.
  * Docs: https://developer.instantly.ai/api/v2/supersearchenrichment
+ *
+ * Note: requires an active paid plan on Instantly.
  */
 async function findEmail(contact) {
   const apiKey = process.env.INSTANTLY_API_KEY;
@@ -17,68 +18,92 @@ async function findEmail(contact) {
   if (!firstName && !lastName) return null;
 
   const name = `${firstName} ${lastName}`.trim();
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+  };
+  const timeout = parseInt(process.env.PROVIDER_TIMEOUT_MS) || 15000;
 
   try {
-    // Build search filters
+    // Step 1: Preview/search for the lead
     const searchFilters = {};
     if (name) searchFilters.name = [name];
     if (company) searchFilters.company_name = { include: [company] };
     if (domain) searchFilters.domains = [domain];
 
-    // Use enrich-leads-from-supersearch with email enrichment enabled
-    const resp = await axios.post(
+    const previewResp = await axios.post(
+      'https://api.instantly.ai/api/v2/supersearch-enrichment/preview-leads-from-supersearch',
+      { search_filters: searchFilters, limit: 1 },
+      { headers, timeout, validateStatus: (s) => s < 500 }
+    );
+
+    if (previewResp.status === 402) {
+      logger.warn('Instantly: no active paid plan');
+      return null;
+    }
+
+    const leads = previewResp.data?.leads || previewResp.data?.data || [];
+    if (!Array.isArray(leads) || leads.length === 0) {
+      logger.info(`Instantly: no leads found for ${name}`);
+      return null;
+    }
+
+    // Check if preview already includes email
+    const previewEmail = leads[0]?.email || leads[0]?.work_email;
+    if (previewEmail) {
+      logger.info(`Instantly (preview): found email for ${name}: ${previewEmail}`);
+      return previewEmail;
+    }
+
+    // Step 2: Enrich the found lead to get email
+    const enrichResp = await axios.post(
       'https://api.instantly.ai/api/v2/supersearch-enrichment/enrich-leads-from-supersearch',
       {
         search_filters: searchFilters,
         limit: 1,
         work_email_enrichment: true,
-        skip_rows_without_email: true,
-        list_name: `LeadCraft - ${name}`,
+        skip_rows_without_email: false,
+        list_name: `LeadCraft-${Date.now()}`,
       },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: parseInt(process.env.PROVIDER_TIMEOUT_MS) || 15000,
-      }
+      { headers, timeout, validateStatus: (s) => s < 500 }
     );
 
-    // The enrichment is async — check if we got an immediate result
-    const enrichmentId = resp.data?.id;
+    if (enrichResp.status === 402) {
+      logger.warn('Instantly: no active paid plan for enrichment');
+      return null;
+    }
+
+    const enrichmentId = enrichResp.data?.id || enrichResp.data?.enrichmentId;
     if (!enrichmentId) {
       logger.warn('Instantly: no enrichment ID returned');
       return null;
     }
 
-    // Poll for enrichment results
-    const maxAttempts = 6;
-    for (let i = 0; i < maxAttempts; i++) {
+    // Step 3: Poll for enrichment results
+    for (let i = 0; i < 6; i++) {
       await new Promise((resolve) => setTimeout(resolve, 3000));
 
       try {
         const statusResp = await axios.get(
           `https://api.instantly.ai/api/v2/supersearch-enrichment/${enrichmentId}`,
-          {
-            headers: { Authorization: `Bearer ${apiKey}` },
-            timeout: 10000,
-          }
+          { headers, timeout: 10000, validateStatus: (s) => s < 500 }
         );
 
-        const leads = statusResp.data?.leads || statusResp.data?.data?.leads || [];
-        if (Array.isArray(leads) && leads.length > 0) {
-          const lead = leads[0];
-          const email = lead.email || lead.work_email;
+        const data = statusResp.data;
+        const resultLeads = data?.leads || data?.data?.leads || data?.data || [];
+
+        if (Array.isArray(resultLeads) && resultLeads.length > 0) {
+          const email = resultLeads[0]?.email || resultLeads[0]?.work_email;
           if (email) {
             logger.info(`Instantly: found email for ${name}: ${email}`);
             return email;
           }
         }
 
-        // Check if status is complete
-        const status = statusResp.data?.status;
-        if (status === 'completed' || status === 'done') {
-          break;
+        const status = data?.status;
+        if (status === 'completed' || status === 'done' || status === 'finished') {
+          logger.info(`Instantly: enrichment complete but no email for ${name}`);
+          return null;
         }
       } catch (pollErr) {
         logger.warn(`Instantly poll error: ${pollErr.response?.status} ${pollErr.message}`);

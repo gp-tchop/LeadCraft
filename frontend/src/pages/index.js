@@ -59,7 +59,8 @@ export default function Home() {
                   </h2>
                   <p className="text-gray-500 max-w-lg mx-auto">
                     Upload a CSV file with contact data. LeadCraft will find missing email
-                    addresses using Apollo, Hunter.io, RocketReach, Clay, and web scraping.
+                    addresses using Apollo, Hunter.io, RocketReach, Instantly, Lemlist,
+                    Serper, ARK AI, Clay, and web scraping.
                   </p>
                 </div>
                 <FileUpload onFileSelected={uploadFile} disabled={false} />

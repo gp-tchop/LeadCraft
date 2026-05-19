@@ -10,7 +10,7 @@ function isValidEmailFormat(email) {
 
 /**
  * Validate email via external verification API (optional).
- * Returns { valid: boolean, score: number }
+ * Returns { valid: boolean, score: number, reason: string }
  */
 async function verifyEmail(email) {
   if (!isValidEmailFormat(email)) {
@@ -19,12 +19,11 @@ async function verifyEmail(email) {
 
   const apiKey = process.env.EMAIL_VERIFY_API_KEY;
   if (!apiKey) {
-    // No verification API configured — trust format check
     return { valid: true, score: 0.5, reason: 'format_only' };
   }
 
   try {
-    // Using ZeroBounce as an example; swap for your provider
+    // ZeroBounce-compatible verification API
     const resp = await axios.get('https://api.zerobounce.net/v2/validate', {
       params: { api_key: apiKey, email },
       timeout: 10000,
@@ -41,15 +40,21 @@ async function verifyEmail(email) {
 
 /**
  * Assign a confidence level based on provider and verification score.
+ * Provider weights reflect data quality / reliability of each source.
  */
 function confidenceLevel(providerName, verificationScore) {
   const providerWeights = {
-    apollo: 0.9,
-    hunter: 0.85,
-    rocketreach: 0.85,
-    clay: 0.8,
-    webscrape: 0.5,
+    apollo:      0.92, // Verified B2B database
+    hunter:      0.88, // Verified B2B database
+    rocketreach: 0.85, // Verified B2B database
+    instantly:   0.80, // SuperSearch verified leads
+    lemlist:     0.78, // AI-assisted enrichment
+    clay:        0.75, // Webhook-based, depends on Clay table setup
+    serper:      0.60, // Web search — email may be from public sources
+    arkai:       0.50, // AI-predicted — plausible but unverified
+    webscrape:   0.55, // Scraped directly from company website
   };
+
   const providerWeight = providerWeights[providerName] || 0.5;
   const combined = (providerWeight + verificationScore) / 2;
 
