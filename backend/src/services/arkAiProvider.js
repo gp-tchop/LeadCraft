@@ -1,89 +1,121 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
-const { isValidEmailFormat } = require('../utils/emailValidator');
 
 /**
- * ARK AI provider — uses ByteDance Ark (Doubao / Volcano Engine) LLM API
- * for AI-powered email address prediction.
+ * ARK AI provider — uses app.ai-ark.com B2B data enrichment API
+ * to find professional email addresses by searching for a person
+ * by name + company/domain.
  *
- * Set ARK_AI_MODEL to your deployed endpoint ID, e.g. "ep-20250519-xxxxxxxx"
- * or a public model like "doubao-pro-32k".
+ * Flow:
+ *   1. POST /people   — search by name + company/domain → get person ID
+ *   2. POST /people/export/single — fetch verified email for that person ID
  *
- * Docs: https://www.volcengine.com/docs/82379/1263512
+ * Auth: X-TOKEN header
+ * Docs: https://docs.ai-ark.com/reference/people-search-1
+ *       https://docs.ai-ark.com/reference/people-export-single
  */
 
-const BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
-const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+const BASE_URL = 'https://api.ai-ark.com/api/developer-portal/v1';
 
 async function findEmail(contact) {
   const apiKey = process.env.ARK_AI_API_KEY;
   if (!apiKey) {
-    logger.warn('ARK AI API key not configured');
+    logger.warn('ARK AI: API key not configured');
     return null;
   }
 
   const { firstName, lastName, company, domain } = contact;
   if (!firstName && !lastName) return null;
-  if (!domain) {
-    logger.info('ARK AI: skipping — no domain available for prediction');
-    return null;
-  }
 
-  const model = process.env.ARK_AI_MODEL || 'doubao-pro-32k';
+  const headers = {
+    'X-TOKEN': apiKey,
+    'Content-Type': 'application/json',
+  };
+  const timeout = parseInt(process.env.PROVIDER_TIMEOUT_MS) || 15000;
 
   try {
-    const systemPrompt =
-      'You are an email format prediction assistant. ' +
-      'Given a person\'s name, company, and domain, predict their most likely professional email address. ' +
-      'Respond with ONLY the email address — no explanation, no punctuation, just the email.';
+    // ── Step 1: People Search ──────────────────────────────────────────────
+    const searchBody = {
+      page: 0,
+      size: 1,
+    };
 
-    const userPrompt =
-      `Predict the professional email for:\n` +
-      `Name: ${firstName} ${lastName}\n` +
-      `Company: ${company || 'Unknown'}\n` +
-      `Domain: ${domain}\n\n` +
-      `Use the most common business email patterns: ` +
-      `firstname.lastname@domain, f.lastname@domain, firstname@domain, firstnamelastname@domain.`;
+    // Build contact filter — use fullName if we have both parts
+    const fullName = [firstName, lastName].filter(Boolean).join(' ');
+    if (fullName) {
+      searchBody.contact = { fullName };
+    }
 
-    const resp = await axios.post(
-      `${BASE_URL}/chat/completions`,
-      {
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: 64,
-        temperature: 0.1,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: parseInt(process.env.PROVIDER_TIMEOUT_MS) || 15000,
-      }
+    // Build account filter — prefer domain over company name
+    if (domain) {
+      searchBody.account = { nameOrDomain: domain };
+    } else if (company) {
+      searchBody.account = { nameOrDomain: company };
+    }
+
+    logger.info(`ARK AI: searching for "${fullName}" at "${domain || company || 'unknown'}"`);
+
+    const searchResp = await axios.post(
+      `${BASE_URL}/people`,
+      searchBody,
+      { headers, timeout }
     );
 
-    const content = resp.data?.choices?.[0]?.message?.content?.trim() || '';
-
-    // Try exact match first
-    if (isValidEmailFormat(content)) {
-      logger.info(`ARK AI: predicted email for ${firstName} ${lastName}: ${content}`);
-      return content;
+    const people = searchResp.data?.content || searchResp.data?.data || [];
+    if (!Array.isArray(people) || people.length === 0) {
+      logger.info(`ARK AI: no results for "${fullName}"`);
+      return null;
     }
 
-    // Extract email from response if LLM added extra text
-    const match = content.match(EMAIL_REGEX);
-    if (match && isValidEmailFormat(match[0])) {
-      logger.info(`ARK AI: extracted email for ${firstName} ${lastName}: ${match[0]}`);
-      return match[0];
+    const personId = people[0]?.id || people[0]?._id;
+    const linkedinUrl = people[0]?.linkedinUrl || people[0]?.linkedin?.url;
+
+    if (!personId && !linkedinUrl) {
+      logger.info(`ARK AI: person found but no ID or LinkedIn URL available`);
+      return null;
     }
 
-    logger.info(`ARK AI: no valid email in response for ${firstName} ${lastName}`);
+    logger.info(`ARK AI: found person ID ${personId} for "${fullName}" — fetching email`);
+
+    // ── Step 2: Export Single Person with Email ────────────────────────────
+    const exportBody = {};
+    if (personId) {
+      exportBody.id = personId;
+    } else {
+      exportBody.url = linkedinUrl;
+    }
+
+    const exportResp = await axios.post(
+      `${BASE_URL}/people/export/single`,
+      exportBody,
+      { headers, timeout }
+    );
+
+    // Email can be at various paths depending on API version
+    const person = exportResp.data;
+    const email =
+      person?.email ||
+      person?.workEmail ||
+      person?.emails?.[0] ||
+      person?.contact?.email ||
+      person?.data?.email;
+
+    if (email && typeof email === 'string' && email.includes('@')) {
+      logger.info(`ARK AI: found email for "${fullName}": ${email}`);
+      return email.trim();
+    }
+
+    logger.info(`ARK AI: no email returned for "${fullName}"`);
     return null;
   } catch (err) {
-    logger.error(`ARK AI API error: ${err.response?.status} ${err.message}`);
+    const status = err.response?.status;
+    if (status === 404) {
+      logger.info(`ARK AI: person or email not found (404)`);
+    } else if (status === 402) {
+      logger.warn(`ARK AI: insufficient credits (402)`);
+    } else {
+      logger.error(`ARK AI error: ${status} ${err.message}`);
+    }
     return null;
   }
 }
